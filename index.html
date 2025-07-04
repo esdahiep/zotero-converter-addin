@@ -11,13 +11,12 @@
     <!-- 2. Giao diện (CSS) -->
     <style>
         :root {
-            --primary-color: #8e44ad; /* Màu tím chủ đạo */
+            --primary-color: #27ae60; /* Màu xanh thành công */
             --secondary-color: #2c3e50;
             --background-color: #f4f7f9;
             --font-color: #333;
             --button-text-color: #ffffff;
-            --success-color: #27ae60;
-            --highlight-color: #f1c40f;
+            --error-color: #c0392b;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -88,64 +87,38 @@
             background-color: #bdc3c7;
             cursor: not-allowed;
         }
-        .conductor-panel {
+        .status-panel {
             margin-top: 20px;
             width: 100%;
             padding: 15px;
             background-color: #ffffff;
-            border: 2px solid var(--primary-color);
             border-radius: 5px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            box-shadow: 0 1px 5px rgba(0,0,0,0.05);
             text-align: left;
             display: none; /* Ẩn ban đầu */
         }
-        .conductor-panel h2 {
+        .status-panel h2 {
             margin-top: 0;
-            font-size: 1.2em;
-            color: var(--primary-color);
-            text-align: center;
-        }
-        .instruction {
-            margin-bottom: 15px;
-        }
-        .instruction-step {
-            display: flex;
-            align-items: center;
-            margin-bottom: 8px;
-        }
-        .step-number {
-            background-color: var(--primary-color);
-            color: white;
-            border-radius: 50%;
-            width: 24px;
-            height: 24px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            font-weight: bold;
-            margin-right: 10px;
-            flex-shrink: 0;
-        }
-        .key-display {
-            font-family: "Courier New", Courier, monospace;
-            background: #e8e8e8;
-            padding: 8px;
-            border-radius: 4px;
+            font-size: 1.1em;
             color: var(--secondary-color);
-            font-weight: bold;
-            text-align: center;
-            margin-bottom: 15px;
-            border: 1px solid #ccc;
         }
-        .key-display span {
-            color: var(--success-color);
+        #status-message {
+            font-weight: bold;
+            font-size: 1em;
+        }
+        .final-instruction {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #eaf5ff;
+            border: 1px solid #3498db;
+            border-radius: 4px;
         }
     </style>
 </head>
 <body>
     <div class="container">
         <div class="header">
-            <h1>Trợ lý Điều khiển Tự động</h1>
+            <h1>Công cụ Chuyển đổi Zotero</h1>
         </div>
 
         <div class="main-content">
@@ -153,103 +126,133 @@
                 <label for="jsonFile">Bước 1: Tải lên `master_map.json`</label>
                 <input type="file" id="jsonFile" accept=".json">
             </div>
-             <div class="step">
-                <label>Bước 2: Bắt đầu Hoàn tất</label>
-                <button class="action-button" id="start-btn">
-                    Tìm & Chuẩn bị Tác vụ Đầu tiên
+            <div class="step">
+                <label>Bước 2: Bắt đầu Chuyển đổi</label>
+                <p style="font-size: 0.9em; margin-top: 0;">Quá trình này sẽ tự động thay thế tất cả các mã khóa `{{ZOTERO:...}}` bằng trích dẫn Zotero.</p>
+                <button class="action-button" id="start-conversion-btn">
+                    Bắt đầu Chuyển đổi Toàn bộ
                 </button>
             </div>
         </div>
 
-        <div class="conductor-panel" id="conductor-panel">
-            <h2>Tác vụ Tiếp theo</h2>
-            <p>Mã khóa dưới đây đã được **tự động sao chép**.</p>
-            <div class="key-display">
-                Đã sao chép: <span id="current-key"></span>
+        <div class="status-panel" id="status-panel">
+            <h2 id="status-title">Trạng thái</h2>
+            <div id="status-message">Đang chờ...</div>
+            <div class="final-instruction" id="final-instruction" style="display:none;">
+                <p><strong>QUAN TRỌNG:</strong> Bây giờ, hãy chuyển sang tab "Zotero" trong Word và nhấn nút <strong>"Refresh"</strong> để hoàn tất.</p>
             </div>
-            <div class="instruction">
-                <div class="instruction-step">
-                    <div class="step-number">1</div>
-                    <div>Nhấn nút "Add/Edit Citation" của Zotero.</div>
-                </div>
-                <div class="instruction-step">
-                    <div class="step-number">2</div>
-                    <div>Dán (Ctrl+V) và nhấn Enter.</div>
-                </div>
-                 <div class="instruction-step">
-                    <div class="step-number">3</div>
-                    <div>Nhấn nút "Tìm Tiếp theo" ở đây.</div>
-                </div>
-            </div>
-            <button class="action-button" id="find-next-btn">Tìm & Chuẩn bị Tác vụ Tiếp theo</button>
         </div>
     </div>
 
     <!-- Mã JavaScript của Add-in -->
     <script type="text/javascript">
+        let masterMap = null;
+
         Office.onReady((info) => {
             if (info.host === Office.HostType.Word) {
                 console.log("Add-in đã sẵn sàng!");
-                document.getElementById("start-btn").onclick = startConductor;
-                document.getElementById("find-next-btn").onclick = findNextPlaceholder;
+                document.getElementById("start-conversion-btn").onclick = startFullConversion;
+                document.getElementById("jsonFile").addEventListener('change', handleFileSelect, false);
             }
         });
 
-        // Hàm để khởi động "Trợ lý Điều khiển"
-        function startConductor() {
-            document.getElementById("start-btn").style.display = "none";
-            document.getElementById("conductor-panel").style.display = "block";
-            findNextPlaceholder(); // Tự động tìm mã khóa đầu tiên
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    masterMap = JSON.parse(e.target.result);
+                    console.log("Đã tải và phân tích thành công tệp master_map.json.");
+                    updateStatus("Đã sẵn sàng. Nhấn nút để bắt đầu.", "var(--primary-color)");
+                } catch (error) {
+                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)");
+                    masterMap = null;
+                }
+            };
+            reader.readAsText(file);
         }
 
-        // Hàm chính để tìm và xử lý mã khóa tiếp theo
-        async function findNextPlaceholder() {
-            const findButton = document.getElementById("find-next-btn");
-            const currentKeySpan = document.getElementById("current-key");
+        function createZoteroOoxml(zoteroKey) {
+            const citationJson = {
+                "citationID": `id_${Math.random().toString(36).substr(2, 9)}`,
+                "properties": {},
+                "citationItems": [{ "key": zoteroKey, "uris": [`http://zotero.org/users/local/placeholder/items/${zoteroKey}`] }],
+                "schema": "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
+            };
+            const jsonString = JSON.stringify(citationJson).replace(/"/g, '&quot;');
+            const ooxml = `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:t>(Waiting for Zotero Refresh)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`;
+            return ooxml.replace(/\s\s+/g, ' ').trim();
+        }
 
-            findButton.disabled = true;
-            currentKeySpan.textContent = "Đang tìm...";
+        async function startFullConversion() {
+            if (!masterMap) {
+                alert("Vui lòng tải lên tệp `master_map.json` trước.");
+                return;
+            }
+
+            const startButton = document.getElementById("start-conversion-btn");
+            const statusPanel = document.getElementById("status-panel");
+            
+            startButton.disabled = true;
+            statusPanel.style.display = "block";
 
             try {
                 await Word.run(async (context) => {
-                    // Sử dụng API tìm kiếm của Word để tìm mã khóa
-                    // {{ZOTERO:*}} là một wildcard expression
-                    const searchResults = context.document.body.search("{{ZOTERO:*}}", { matchWildcards: true });
-                    context.load(searchResults, 'text');
+                    updateStatus("Đang đọc toàn bộ tài liệu...", "var(--primary-color)");
+                    
+                    const body = context.document.body;
+                    // Lấy toàn bộ nội dung tài liệu dưới dạng OOXML
+                    const originalOoxml = body.getOoxml();
                     await context.sync();
 
-                    if (searchResults.items.length > 0) {
-                        const firstResult = searchResults.items[0];
-                        const placeholderText = firstResult.text;
+                    let ooxmlString = originalOoxml.value;
+                    let replacementsCount = 0;
+
+                    updateStatus("Đang thực hiện thay thế trong bộ nhớ...", "var(--primary-color)");
+
+                    // Biểu thức chính quy để tìm tất cả các mã khóa
+                    const placeholderRegex = /\{\{ZOTERO:([^}]+)\}\}/g;
+                    
+                    // Thực hiện thay thế trên chuỗi OOXML
+                    const newOoxmlString = ooxmlString.replace(placeholderRegex, (match, zoteroKey) => {
+                        replacementsCount++;
+                        // Tạo OOXML cho trích dẫn Zotero
+                        // Lưu ý: Chúng ta cần trích xuất chỉ phần bên trong của thẻ <w:p>
+                        const zoteroOoxml = createZoteroOoxml(zoteroKey);
+                        const contentMatch = /<w:p[^>]*>([\s\S]*)<\/w:p>/.exec(zoteroOoxml);
+                        return contentMatch ? contentMatch[1] : '';
+                    });
+
+                    if (replacementsCount > 0) {
+                        updateStatus(`Đã chuẩn bị xong ${replacementsCount} trích dẫn. Đang xây dựng lại tài liệu...`, "var(--primary-color)");
                         
-                        // Trích xuất Zotero Key từ mã khóa
-                        const zoteroKey = placeholderText.replace("{{ZOTERO:", "").replace("}}", "");
-
-                        // 1. Tự động sao chép Key vào clipboard
-                        if (navigator.clipboard) {
-                            await navigator.clipboard.writeText(zoteroKey);
-                            currentKeySpan.textContent = zoteroKey;
-                        } else {
-                            currentKeySpan.textContent = "Lỗi: Không thể sao chép";
-                        }
-
-                        // 2. Chọn và tô sáng mã khóa trong tài liệu
-                        firstResult.select();
-                        firstResult.font.highlightColor = '#FFFF00'; // Màu vàng
-
-                        await context.sync();
+                        // Xóa nội dung cũ và chèn nội dung mới đã được thay thế
+                        body.clear();
+                        body.insertOoxml(newOoxmlString, Word.InsertLocation.start);
                     } else {
-                        // Không còn mã khóa nào
-                        alert("Chúc mừng! Đã xử lý tất cả các trích dẫn.");
-                        document.getElementById("conductor-panel").innerHTML = "<h2>Hoàn tất!</h2>";
+                         updateStatus("Không tìm thấy mã khóa nào để thay thế.", "var(--primary-color)");
                     }
+
+                    await context.sync();
+                    
+                    updateStatus(`Hoàn tất! Đã thay thế thành công ${replacementsCount} trích dẫn.`, "var(--success-color)");
+                    document.getElementById("status-title").textContent = "Hoàn tất!";
+                    document.getElementById("final-instruction").style.display = "block";
                 });
+
             } catch (error) {
                 console.error(error);
-                alert("Đã xảy ra lỗi: " + error.message);
+                updateStatus(`Đã xảy ra lỗi: ${error.message}`, "var(--error-color)");
             } finally {
-                findButton.disabled = false;
+                // Không kích hoạt lại nút để tránh chạy lại
             }
+        }
+        
+        function updateStatus(message, color) {
+            const statusMessage = document.getElementById("status-message");
+            statusMessage.textContent = message;
+            statusMessage.style.color = color;
         }
     </script>
 </body>
