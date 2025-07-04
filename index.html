@@ -4,15 +4,12 @@
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
     <title>Zotero Converter - All-in-One</title>
-
-    <!-- 1. Nạp Office.js từ CDN của Microsoft -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
-
-    <!-- 2. Giao diện (CSS) -->
     <style>
+        /* CSS giữ nguyên như bạn đã định nghĩa */
         :root {
-            --primary-color: #3498db; /* Màu xanh dương cho giai đoạn 1 */
-            --success-color: #27ae60; /* Màu xanh lá cho giai đoạn 2 */
+            --primary-color: #3498db;
+            --success-color: #27ae60;
             --secondary-color: #2c3e50;
             --background-color: #f4f7f9;
             --font-color: #333;
@@ -91,11 +88,12 @@
 
     <script type="text/javascript">
         let masterMap = null;
+        const BATCH_SIZE = 25; // Xử lý theo lô để tăng hiệu suất
 
         Office.onReady((info) => {
             if (info.host === Office.HostType.Word) {
-                document.getElementById("tagging-btn").onclick = () => runSequentialProcessor(tagSingleItem, "\\[[0-9]{1,}\\]", "Gắn thẻ");
-                document.getElementById("finalize-btn").onclick = () => runSequentialProcessor(finalizeSingleItem, "\\{\\{ZOTERO:*\\}\\}", "Hoàn tất");
+                document.getElementById("tagging-btn").onclick = () => processBatch(tagBatchProcessor, "\\[[0-9]{1,}\\]", "Gắn thẻ");
+                document.getElementById("finalize-btn").onclick = () => processBatch(finalizeBatchProcessor, "\\{\\{ZOTERO:[^}]+\\}\\}", "Hoàn tất");
                 document.getElementById("jsonFile").addEventListener('change', handleFileSelect, false);
             }
         });
@@ -103,20 +101,33 @@
         function handleFileSelect(event) {
             const file = event.target.files[0];
             if (!file) return;
+            
+            // Kiểm tra định dạng file
+            if (file.type !== "application/json" && !file.name.endsWith('.json')) {
+                updateStatus("Lỗi: Vui lòng chọn file JSON hợp lệ", "var(--error-color)", 0);
+                return;
+            }
+
             const reader = new FileReader();
             reader.onload = (e) => {
                 try {
                     masterMap = JSON.parse(e.target.result);
+                    
+                    // Kiểm tra cấu trúc JSON
+                    if (typeof masterMap !== 'object' || Object.keys(masterMap).length === 0) {
+                        throw new Error("Cấu trúc JSON không hợp lệ");
+                    }
+                    
                     updateStatus("Đã tải tệp `master_map.json` thành công.", "var(--primary-color)", 0);
                 } catch (error) {
-                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)", 0);
+                    updateStatus(`Lỗi: ${error.message || "Tệp JSON không hợp lệ"}`, "var(--error-color)", 0);
                     masterMap = null;
                 }
             };
             reader.readAsText(file);
         }
 
-        async function runSequentialProcessor(processorFunction, searchPattern, taskName) {
+        async function processBatch(processorFunction, searchPattern, taskName) {
             const buttonId = taskName === 'Gắn thẻ' ? 'tagging-btn' : 'finalize-btn';
             const button = document.getElementById(buttonId);
             
@@ -132,7 +143,7 @@
             try {
                 // Đếm tổng số mục cần xử lý
                 await Word.run(async (context) => {
-                    updateStatus(`Đang đếm tổng số mục cho tác vụ "${taskName}"...`, "var(--primary-color)", 0);
+                    updateStatus(`Đang đếm tổng số mục...`, "var(--primary-color)", 0);
                     const searchResults = context.document.body.search(searchPattern, { matchWildcards: true });
                     context.load(searchResults, "text");
                     await context.sync();
@@ -140,87 +151,145 @@
                 });
 
                 if (totalItems === 0) {
-                    updateStatus(`Không tìm thấy mục nào để ${taskName}.`, "var(--primary-color)", 100);
-                    button.disabled = false;
+                    updateStatus(`Không tìm thấy mục nào để ${taskName.toLowerCase()}.`, "var(--primary-color)", 100);
                     return;
                 }
 
-                // Bắt đầu vòng lặp xử lý tuần tự
+                // Xử lý theo từng lô
                 while (processedItems < totalItems) {
                     await Word.run(async (context) => {
-                        const searchResults = context.document.body.search(searchPattern, { matchWildcards: true, top: 1 });
+                        const searchResults = context.document.body.search(
+                            searchPattern, 
+                            { 
+                                matchWildcards: true,
+                                top: BATCH_SIZE,
+                                ignorePunct: true
+                            }
+                        );
+                        
                         context.load(searchResults, "text");
                         await context.sync();
 
-                        if (searchResults.items.length > 0) {
-                            // Gọi hàm xử lý và chờ nó hoàn thành
-                            await processorFunction(searchResults.items[0]);
-                            await context.sync();
-                            processedItems++;
-                            const progress = (processedItems / totalItems) * 100;
-                            updateStatus(`Đang ${taskName}... ${processedItems}/${totalItems}`, "var(--primary-color)", progress);
-                        } else {
-                            // Không tìm thấy nữa, kết thúc vòng lặp
+                        const batchItems = searchResults.items;
+                        const batchSize = batchItems.length;
+                        
+                        if (batchSize === 0) {
                             processedItems = totalItems;
+                            return;
                         }
+
+                        // Xử lý hàng loạt
+                        await processorFunction(batchItems);
+                        await context.sync();
+                        
+                        processedItems += batchSize;
+                        const progress = Math.min(100, Math.round((processedItems / totalItems) * 100));
+                        updateStatus(`Đang ${taskName}... ${processedItems}/${totalItems}`, "var(--primary-color)", progress);
                     });
-                     // Thêm một khoảng chờ nhỏ để Word "thở"
-                    await new Promise(resolve => setTimeout(resolve, 50));
+                    
+                    // Tạm dừng để tránh quá tải
+                    await new Promise(resolve => setTimeout(resolve, 100));
                 }
                 
-                updateStatus(`Hoàn tất tác vụ "${taskName}"! Đã xử lý ${processedItems} mục.`, "var(--success-color)", 100);
+                updateStatus(`✅ Hoàn tất ${taskName}! Đã xử lý ${processedItems} mục.`, "var(--success-color)", 100);
                 if (taskName === 'Hoàn tất') {
                     document.getElementById("status-title").textContent = "Hoàn tất!";
                     document.getElementById("final-instruction").style.display = "block";
                 }
 
             } catch (error) {
-                updateStatus(`Lỗi khi ${taskName}: ${error.message}`, "var(--error-color)", 100);
+                console.error(`Lỗi ${taskName}:`, error);
+                updateStatus(`❌ Lỗi: ${error.message || error}`, "var(--error-color)", 100);
             } finally {
                 button.disabled = false;
             }
         }
 
-        // --- ĐÃ SỬA LỖI: Thêm `await` vào các hàm xử lý ---
-        async function tagSingleItem(range) {
-            const refKey = range.text.trim();
-            const zoteroKey = masterMap[refKey];
+        // Xử lý hàng loạt cho gắn thẻ
+        async function tagBatchProcessor(ranges) {
+            for (const range of ranges) {
+                const refKey = range.text.trim();
+                const zoteroKey = masterMap[refKey];
 
-            if (zoteroKey) {
-                await range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
-            } else {
-                console.warn(`Không tìm thấy key cho: ${refKey} trong master_map.json`);
-                // Thay thế bằng một ký tự đặc biệt để không bị tìm thấy lại
-                await range.insertText(refKey.replace('[', '<').replace(']', '>'), Word.InsertLocation.replace);
+                if (zoteroKey) {
+                    range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
+                } else {
+                    // Đánh dấu các mục không tìm thấy
+                    range.insertText(`❌${refKey}`, Word.InsertLocation.replace);
+                }
             }
         }
 
-        async function finalizeSingleItem(range) {
-            const placeholderText = range.text;
-            const zoteroKey = placeholderText.replace("{{ZOTERO:", "").replace("}}", "");
-            const ooxml = createZoteroOoxml(zoteroKey);
-            await range.insertOoxml(ooxml, Word.InsertLocation.replace);
+        // Xử lý hàng loạt cho hoàn tất
+        async function finalizeBatchProcessor(ranges) {
+            for (const range of ranges) {
+                const placeholderText = range.text;
+                const match = placeholderText.match(/\{\{ZOTERO:([^}]+)\}\}/);
+                
+                if (match && match[1]) {
+                    const zoteroKey = match[1];
+                    const ooxml = createZoteroOoxml(zoteroKey);
+                    range.insertOoxml(ooxml, Word.InsertLocation.replace);
+                } else {
+                    // Giữ nguyên nếu không khớp
+                    range.insertText(placeholderText, Word.InsertLocation.replace);
+                }
+            }
         }
 
+        // Tạo OOXML chuẩn cho Zotero
         function createZoteroOoxml(zoteroKey) {
+            const citationID = `cit${Date.now()}${Math.floor(Math.random() * 1000)}`;
+            
             const citationJson = {
-                "citationID": `id_${Math.random().toString(36).substr(2, 9)}`,
-                "properties": {},
-                "citationItems": [{ "key": zoteroKey, "uris": [`http://zotero.org/users/local/placeholder/items/${zoteroKey}`] }],
-                "schema": "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
+                citationID: citationID,
+                properties: {
+                    noteIndex: 0
+                },
+                citationItems: [{
+                    id: Math.floor(Math.random() * 100000),
+                    uris: [`http://zotero.org/users/local/${zoteroKey}`],
+                    itemData: {
+                        id: Math.floor(Math.random() * 100000),
+                        type: "book"
+                    }
+                }],
+                schema: "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
             };
-            const jsonString = JSON.stringify(citationJson).replace(/"/g, '&quot;');
-            const ooxmlFragment = `<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:t>(Waiting for Zotero Refresh)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
-            return ooxmlFragment.replace(/\s\s+/g, ' ').trim();
+
+            const jsonString = JSON.stringify(citationJson)
+                .replace(/"/g, '&quot;')
+                .replace(/\//g, '\\/');
+
+            return `
+                <w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                    <w:fldChar w:fldCharType="begin"/>
+                </w:r>
+                <w:r>
+                    <w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText>
+                </w:r>
+                <w:r>
+                    <w:fldChar w:fldCharType="separate"/>
+                </w:r>
+                <w:r>
+                    <w:rPr><w:noProof/></w:rPr>
+                    <w:t>(Đang chờ Zotero...)</w:t>
+                </w:r>
+                <w:r>
+                    <w:fldChar w:fldCharType="end"/>
+                </w:r>
+            `.replace(/\s+/g, ' ').trim();
         }
         
         function updateStatus(message, color, progress) {
             const statusPanel = document.getElementById("status-panel");
             const statusMessage = document.getElementById("status-message");
             const progressBar = document.getElementById("progress-bar");
+            
             statusPanel.style.display = "block";
             statusMessage.textContent = message;
             statusMessage.style.color = color;
+            
             if (progress !== undefined) {
                 progressBar.style.width = `${progress}%`;
                 progressBar.style.backgroundColor = color;
