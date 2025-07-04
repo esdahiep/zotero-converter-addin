@@ -19,7 +19,6 @@
             --success-color: #27ae60;
             --error-color: #c0392b;
         }
-
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
             display: flex;
@@ -33,29 +32,35 @@
             color: var(--font-color);
             box-sizing: border-box;
         }
-
         .header {
             width: 100%;
             text-align: center;
             margin-bottom: 25px;
         }
-
         .header h1 {
             color: var(--secondary-color);
             margin: 0;
             font-size: 1.5em;
         }
-
         .main-content {
             width: 100%;
-            text-align: center;
+            text-align: left;
         }
-
-        p {
-            font-size: 0.95em;
-            line-height: 1.6;
+        .step {
+            margin-bottom: 15px;
         }
-
+        .step label {
+            font-weight: bold;
+            display: block;
+            margin-bottom: 5px;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+            box-sizing: border-box;
+        }
         .action-button {
             width: 100%;
             padding: 15px 20px;
@@ -67,17 +72,15 @@
             border-radius: 5px;
             cursor: pointer;
             transition: background-color 0.3s ease;
+            margin-top: 10px;
         }
-
         .action-button:hover {
             background-color: #3498db;
         }
-
         .action-button:disabled {
             background-color: #bdc3c7;
             cursor: not-allowed;
         }
-
         .status-panel {
             margin-top: 20px;
             width: 100%;
@@ -88,7 +91,6 @@
             text-align: left;
             display: none; /* Ẩn ban đầu */
         }
-        
         .status-panel h2 {
             margin-top: 0;
             font-size: 1.1em;
@@ -96,19 +98,16 @@
             border-bottom: 1px solid #ecf0f1;
             padding-bottom: 8px;
         }
-
         #status-message {
             font-weight: bold;
             font-size: 1em;
         }
-
         .progress-bar-container {
             width: 100%;
             background-color: #ecf0f1;
             border-radius: 5px;
             margin-top: 10px;
         }
-
         .progress-bar {
             width: 0%;
             height: 10px;
@@ -124,10 +123,16 @@
     </div>
 
     <div class="main-content">
-        <p>Nhấn nút bên dưới để bắt đầu quá trình tự động chuyển đổi các trích dẫn.</p>
-        <button class="action-button" id="start-conversion-btn">
-            Bắt đầu Chuyển đổi
-        </button>
+        <div class="step">
+            <label for="jsonFile">Bước 1: Tải lên tệp `master_map.json`</label>
+            <input type="file" id="jsonFile" accept=".json">
+        </div>
+        <div class="step">
+            <label>Bước 2: Bắt đầu chuyển đổi</label>
+            <button class="action-button" id="start-conversion-btn">
+                Bắt đầu Chuyển đổi
+            </button>
+        </div>
     </div>
 
     <div class="status-panel" id="status-panel">
@@ -140,62 +145,127 @@
 
     <!-- 3. Mã JavaScript của Add-in -->
     <script type="text/javascript">
-        // Khởi tạo Office khi tài liệu đã sẵn sàng
+        // Biến toàn cục để lưu trữ bản đồ liên kết
+        let masterMap = null;
+
         Office.onReady((info) => {
             if (info.host === Office.HostType.Word) {
-                console.log("Add-in đã sẵn sàng để hoạt động trong Word!");
-                // Gán sự kiện cho nút bấm
+                console.log("Add-in đã sẵn sàng!");
+                // Gán sự kiện cho các thành phần
                 document.getElementById("start-conversion-btn").onclick = startConversion;
+                document.getElementById("jsonFile").addEventListener('change', handleFileSelect, false);
             }
         });
 
         /**
-         * Hàm này sẽ được gọi khi người dùng nhấn nút "Bắt đầu Chuyển đổi".
-         * Ở giai đoạn 2, nó chỉ mô phỏng quá trình.
-         * Ở giai đoạn 3, chúng ta sẽ thêm logic xử lý thực sự vào đây.
+         * Xử lý việc người dùng chọn tệp JSON và đọc nội dung của nó.
+         */
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) {
+                return;
+            }
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    masterMap = JSON.parse(e.target.result);
+                    console.log("Đã tải và phân tích thành công tệp master_map.json.");
+                    updateStatus("Đã sẵn sàng. Nhấn nút để bắt đầu.", "var(--primary-color)");
+                } catch (error) {
+                    console.error("Lỗi khi phân tích JSON:", error);
+                    alert("Tệp JSON không hợp lệ. Vui lòng kiểm tra lại.");
+                    masterMap = null;
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        /**
+         * Hàm chính để bắt đầu quá trình chuyển đổi.
          */
         async function startConversion() {
+            if (!masterMap) {
+                alert("Vui lòng tải lên tệp master_map.json trước.");
+                return;
+            }
+
             const startButton = document.getElementById("start-conversion-btn");
             const statusPanel = document.getElementById("status-panel");
+            
+            startButton.disabled = true;
+            statusPanel.style.display = "block";
+
+            try {
+                await Word.run(async (context) => {
+                    updateStatus("Đang quét toàn bộ tài liệu...", 10);
+                    
+                    // Lấy tất cả các đoạn văn trong tài liệu
+                    const paragraphs = context.document.body.paragraphs;
+                    context.load(paragraphs, 'text');
+                    await context.sync();
+
+                    const totalParagraphs = paragraphs.items.length;
+                    let processedParagraphs = 0;
+
+                    // Biểu thức chính quy để tìm các cụm trích dẫn, ví dụ: [123] hoặc [12, 34]
+                    const citationPattern = /\[\s*\d+(?:\s*,\s*\d+)*\s*\]/g;
+
+                    for (const para of paragraphs.items) {
+                        const originalText = para.text;
+                        const matches = originalText.match(citationPattern);
+
+                        if (matches) {
+                            let newText = originalText;
+                            // Thay thế từng cụm trích dẫn tìm thấy
+                            for (const match of matches) {
+                                // Tách các số trong một cụm: "[1, 23]" -> ["1", "23"]
+                                const numbers = match.match(/\d+/g) || [];
+                                let replacementString = "";
+                                
+                                // Tạo chuỗi thay thế từ các Zotero key
+                                for (const num of numbers) {
+                                    const refKey = `[${num}]`;
+                                    const zoteroKey = masterMap[refKey];
+                                    if (zoteroKey) {
+                                        replacementString += `{{ZOTERO:${zoteroKey}}}`;
+                                    }
+                                }
+                                // Thay thế cụm trích dẫn cũ bằng chuỗi mã khóa mới
+                                newText = newText.replace(match, replacementString);
+                            }
+                            // Cập nhật lại nội dung của đoạn văn
+                            para.insertText(newText, Word.InsertLocation.replace);
+                        }
+                        
+                        processedParagraphs++;
+                        const progress = (processedParagraphs / totalParagraphs) * 100;
+                        updateStatus(`Đang xử lý đoạn văn ${processedParagraphs}/${totalParagraphs}...`, progress);
+                    }
+
+                    await context.sync();
+                    updateStatus("Hoàn tất! Tài liệu đã được cập nhật.", 100, "var(--success-color)");
+                });
+
+            } catch (error) {
+                console.error(error);
+                updateStatus(`Đã xảy ra lỗi: ${error.message}`, 100, "var(--error-color)");
+            } finally {
+                // Giữ nút bị vô hiệu hóa để người dùng không chạy lại
+                // startButton.disabled = false;
+            }
+        }
+        
+        /**
+         * Hàm tiện ích để cập nhật giao diện trạng thái.
+         */
+        function updateStatus(message, progress, color = "var(--primary-color)") {
             const statusMessage = document.getElementById("status-message");
             const progressBar = document.getElementById("progress-bar");
 
-            // Vô hiệu hóa nút bấm và hiển thị bảng trạng thái
-            startButton.disabled = true;
-            statusPanel.style.display = "block";
-            
-            try {
-                // --- PHẦN MÔ PHỎNG ---
-                // Ở Giai đoạn 3, chúng ta sẽ thay thế phần này bằng logic thực tế
-                
-                // 1. Mô phỏng đọc tệp master_map.json
-                statusMessage.textContent = "Đang đọc bản đồ liên kết...";
-                progressBar.style.width = "10%";
-                await new Promise(resolve => setTimeout(resolve, 1000)); // Giả lập độ trễ
-
-                // 2. Mô phỏng quét tài liệu
-                statusMessage.textContent = "Đang quét tài liệu tìm trích dẫn...";
-                progressBar.style.width = "30%";
-                await new Promise(resolve => setTimeout(resolve, 1500));
-
-                // 3. Mô phỏng thay thế trích dẫn
-                statusMessage.textContent = "Đang thay thế trích dẫn (150/437)...";
-                progressBar.style.width = "65%";
-                await new Promise(resolve => setTimeout(resolve, 2000));
-
-                // 4. Hoàn tất
-                statusMessage.textContent = "Hoàn tất! Tất cả trích dẫn đã được chuyển đổi.";
-                progressBar.style.width = "100%";
-                progressBar.style.backgroundColor = "var(--success-color)";
-
-            } catch (error) {
-                // Xử lý lỗi nếu có
-                console.error(error);
-                statusMessage.textContent = "Đã xảy ra lỗi. Vui lòng xem Console.";
-                progressBar.style.backgroundColor = "var(--error-color)";
-            } finally {
-                // Kích hoạt lại nút bấm sau khi hoàn tất hoặc lỗi
-                // startButton.disabled = false; // Tạm thời bình luận dòng này để giữ trạng thái hoàn tất
+            statusMessage.textContent = message;
+            if (progress !== undefined) {
+                progressBar.style.width = `${progress}%`;
+                progressBar.style.backgroundColor = color;
             }
         }
     </script>
