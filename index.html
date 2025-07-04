@@ -49,6 +49,8 @@
         .status-panel { margin-top: 20px; width: 100%; padding: 15px; background-color: #ffffff; border-radius: 5px; box-shadow: 0 1px 5px rgba(0,0,0,0.05); text-align: left; display: none; }
         .status-panel h2 { margin-top: 0; font-size: 1.1em; color: var(--secondary-color); }
         #status-message { font-weight: bold; font-size: 1em; }
+        .progress-bar-container { width: 100%; background-color: #ecf0f1; border-radius: 5px; margin-top: 10px; height: 12px; }
+        .progress-bar { width: 0%; height: 100%; background-color: var(--primary-color); border-radius: 5px; transition: width 0.1s linear; }
         .final-instruction { margin-top: 15px; padding: 10px; background-color: #eaf5ff; border: 1px solid #3498db; border-radius: 4px; }
     </style>
 </head>
@@ -64,13 +66,13 @@
                 <input type="file" id="jsonFile" accept=".json">
             </div>
             <div class="step step-1">
-                <label>Bước 2: Gắn thẻ cho Tài liệu</label>
+                <label>Bước 2: Gắn thẻ Tự động</label>
                 <p style="font-size: 0.9em; margin-top: 0;">Thay thế các số `[123]` bằng mã khóa `{{ZOTERO:Key}}`.</p>
                 <button class="action-button" id="tagging-btn">Bắt đầu Gắn thẻ</button>
             </div>
              <div class="step step-2">
-                <label>Bước 3: Hoàn tất Chuyển đổi</label>
-                <p style="font-size: 0.9em; margin-top: 0;">Chuyển đổi các mã khóa đã gắn thẻ thành trích dẫn Zotero thực sự.</p>
+                <label>Bước 3: Hoàn tất Tự động</label>
+                <p style="font-size: 0.9em; margin-top: 0;">Chuyển đổi các mã khóa đã gắn thẻ thành trích dẫn Zotero.</p>
                 <button class="action-button" id="finalize-btn">Bắt đầu Hoàn tất</button>
             </div>
         </div>
@@ -78,6 +80,9 @@
         <div class="status-panel" id="status-panel">
             <h2 id="status-title">Trạng thái</h2>
             <div id="status-message">Đang chờ...</div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
             <div class="final-instruction" id="final-instruction" style="display:none;">
                 <p><strong>QUAN TRỌNG:</strong> Bây giờ, hãy chuyển sang tab "Zotero" trong Word và nhấn nút <strong>"Refresh"</strong> để hoàn tất.</p>
             </div>
@@ -86,12 +91,11 @@
 
     <script type="text/javascript">
         let masterMap = null;
-        const BATCH_SIZE = 50; // Xử lý 50 mục mỗi lần để đảm bảo ổn định
 
         Office.onReady((info) => {
             if (info.host === Office.HostType.Word) {
-                document.getElementById("tagging-btn").onclick = () => processInBatches("\\[[0-9]{1,}\\]", tagSingleItem, "Gắn thẻ");
-                document.getElementById("finalize-btn").onclick = () => processInBatches("\\{\\{ZOTERO:*\\}\\}", finalizeSingleItem, "Hoàn tất");
+                document.getElementById("tagging-btn").onclick = () => runSequentialProcessor(tagSingleItem, "\\[[0-9]{1,}\\]", "Gắn thẻ");
+                document.getElementById("finalize-btn").onclick = () => runSequentialProcessor(finalizeSingleItem, "\\{\\{ZOTERO:*\\}\\}", "Hoàn tất");
                 document.getElementById("jsonFile").addEventListener('change', handleFileSelect, false);
             }
         });
@@ -103,16 +107,16 @@
             reader.onload = (e) => {
                 try {
                     masterMap = JSON.parse(e.target.result);
-                    updateStatus("Đã tải tệp `master_map.json` thành công. Sẵn sàng Gắn thẻ.", "var(--primary-color)");
+                    updateStatus("Đã tải tệp `master_map.json` thành công.", "var(--primary-color)", 0);
                 } catch (error) {
-                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)");
+                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)", 0);
                     masterMap = null;
                 }
             };
             reader.readAsText(file);
         }
 
-        async function processInBatches(searchPattern, processorFunction, taskName) {
+        async function runSequentialProcessor(processorFunction, searchPattern, taskName) {
             const buttonId = taskName === 'Gắn thẻ' ? 'tagging-btn' : 'finalize-btn';
             const button = document.getElementById(buttonId);
             
@@ -122,68 +126,80 @@
             }
 
             button.disabled = true;
-            let totalReplacements = 0;
+            let totalItems = 0;
+            let processedItems = 0;
 
             try {
+                // Đếm tổng số mục cần xử lý
                 await Word.run(async (context) => {
-                    updateStatus(`Bắt đầu tác vụ "${taskName}"...`, "var(--primary-color)");
-                    
-                    // Vòng lặp để xử lý theo từng lô
-                    while (true) {
-                        const searchResults = context.document.body.search(searchPattern, { matchWildcards: true, top: BATCH_SIZE });
+                    updateStatus(`Đang đếm tổng số mục cho tác vụ "${taskName}"...`, "var(--primary-color)", 0);
+                    const searchResults = context.document.body.search(searchPattern, { matchWildcards: true });
+                    context.load(searchResults, "text");
+                    await context.sync();
+                    totalItems = searchResults.items.length;
+                });
+
+                if (totalItems === 0) {
+                    updateStatus(`Không tìm thấy mục nào để ${taskName}.`, "var(--primary-color)", 100);
+                    button.disabled = false;
+                    return;
+                }
+
+                // Bắt đầu vòng lặp xử lý tuần tự
+                while (processedItems < totalItems) {
+                    await Word.run(async (context) => {
+                        const searchResults = context.document.body.search(searchPattern, { matchWildcards: true, top: 1 });
                         context.load(searchResults, "text");
                         await context.sync();
 
-                        if (searchResults.items.length === 0) {
-                            break; // Không còn gì để xử lý
+                        if (searchResults.items.length > 0) {
+                            // Gọi hàm xử lý và chờ nó hoàn thành
+                            await processorFunction(searchResults.items[0]);
+                            await context.sync();
+                            processedItems++;
+                            const progress = (processedItems / totalItems) * 100;
+                            updateStatus(`Đang ${taskName}... ${processedItems}/${totalItems}`, "var(--primary-color)", progress);
+                        } else {
+                            // Không tìm thấy nữa, kết thúc vòng lặp
+                            processedItems = totalItems;
                         }
-                        
-                        let batchReplacements = 0;
-                        for (const range of searchResults.items) {
-                            if (processorFunction(range)) {
-                                batchReplacements++;
-                            }
-                        }
-                        
-                        await context.sync();
-                        totalReplacements += batchReplacements;
-                        updateStatus(`Đã xử lý ${totalReplacements} mục...`, "var(--primary-color)");
-                    }
+                    });
+                     // Thêm một khoảng chờ nhỏ để Word "thở"
+                    await new Promise(resolve => setTimeout(resolve, 50));
+                }
+                
+                updateStatus(`Hoàn tất tác vụ "${taskName}"! Đã xử lý ${processedItems} mục.`, "var(--success-color)", 100);
+                if (taskName === 'Hoàn tất') {
+                    document.getElementById("status-title").textContent = "Hoàn tất!";
+                    document.getElementById("final-instruction").style.display = "block";
+                }
 
-                    updateStatus(`Hoàn tất! Đã xử lý tổng cộng ${totalReplacements} mục.`, "var(--success-color)");
-                    button.textContent = `Đã ${taskName} xong`;
-                    if (taskName === 'Hoàn tất') {
-                         document.getElementById("final-instruction").style.display = "block";
-                    }
-                });
             } catch (error) {
-                updateStatus(`Lỗi khi ${taskName}: ${error.message}`, "var(--error-color)");
+                updateStatus(`Lỗi khi ${taskName}: ${error.message}`, "var(--error-color)", 100);
             } finally {
                 button.disabled = false;
-                 button.textContent = `Bắt đầu ${taskName}`;
             }
         }
 
-        // --- ĐÃ SỬA LỖI: Thêm kiểm tra zoteroKey trước khi thay thế ---
-        function tagSingleItem(range) {
-            const refKey = range.text;
+        // --- ĐÃ SỬA LỖI: Thêm `await` vào các hàm xử lý ---
+        async function tagSingleItem(range) {
+            const refKey = range.text.trim();
             const zoteroKey = masterMap[refKey];
 
             if (zoteroKey) {
-                range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
-                return true; // Báo hiệu đã có thay thế
+                await range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
             } else {
                 console.warn(`Không tìm thấy key cho: ${refKey} trong master_map.json`);
-                return false; // Báo hiệu không có thay thế
+                // Thay thế bằng một ký tự đặc biệt để không bị tìm thấy lại
+                await range.insertText(refKey.replace('[', '<').replace(']', '>'), Word.InsertLocation.replace);
             }
         }
 
-        function finalizeSingleItem(range) {
+        async function finalizeSingleItem(range) {
             const placeholderText = range.text;
             const zoteroKey = placeholderText.replace("{{ZOTERO:", "").replace("}}", "");
             const ooxml = createZoteroOoxml(zoteroKey);
-            range.insertOoxml(ooxml, Word.InsertLocation.replace);
-            return true;
+            await range.insertOoxml(ooxml, Word.InsertLocation.replace);
         }
 
         function createZoteroOoxml(zoteroKey) {
@@ -198,12 +214,17 @@
             return ooxmlFragment.replace(/\s\s+/g, ' ').trim();
         }
         
-        function updateStatus(message, color) {
+        function updateStatus(message, color, progress) {
             const statusPanel = document.getElementById("status-panel");
             const statusMessage = document.getElementById("status-message");
+            const progressBar = document.getElementById("progress-bar");
             statusPanel.style.display = "block";
             statusMessage.textContent = message;
             statusMessage.style.color = color;
+            if (progress !== undefined) {
+                progressBar.style.width = `${progress}%`;
+                progressBar.style.backgroundColor = color;
+            }
         }
     </script>
 </body>
