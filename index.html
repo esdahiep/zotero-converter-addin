@@ -181,19 +181,25 @@
             }
         }
 
-        // --- ĐÃ SỬA LỖI: Thêm `await` và kiểm tra zoteroKey ---
+        // --- ĐÃ SỬA LỖI: Thêm `async/await` và kiểm tra zoteroKey ---
         async function tagSingleItem(range) {
             const refKey = range.text.trim();
-            const zoteroKey = masterMap[refKey];
-            
+            const zoteroKey = masterMap?.[refKey];
+
             console.log(`🔎 Đang xử lý refKey: ${refKey} → Zotero key tương ứng: ${zoteroKey}`);
 
-            if (zoteroKey) {
-                await range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
-            } else {
-                console.warn(`Không tìm thấy key cho: ${refKey} trong master_map.json. Sẽ tô vàng.`);
-                // Tô vàng các mục không tìm thấy để người dùng dễ nhận biết
-                range.font.highlightColor = '#FFFF00'; // Màu vàng
+            try {
+                if (typeof zoteroKey === 'string' && zoteroKey.length > 0) {
+                    await range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
+                } else {
+                    console.warn(`⚠️ Không tìm thấy key cho: ${refKey}. Tô màu vàng.`);
+                    // Tô vàng các mục không tìm thấy để người dùng dễ nhận biết
+                    range.font.highlightColor = '#FFFF00'; // Màu vàng
+                }
+            } catch (err) {
+                console.error(`❌ Lỗi khi xử lý: ${refKey}`, err.name, err.message);
+                // Ném lỗi ra ngoài để vòng lặp chính có thể bắt được
+                throw err;
             }
         }
 
