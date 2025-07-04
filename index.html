@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=Edge" />
-    <title>Zotero Converter Add-in</title>
+    <title>Zotero Converter - Final Version</title>
 
     <!-- 1. Nạp Office.js từ CDN của Microsoft -->
     <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js" type="text/javascript"></script>
@@ -11,12 +11,11 @@
     <!-- 2. Giao diện (CSS) -->
     <style>
         :root {
-            --primary-color: #2980b9;
+            --primary-color: #27ae60; /* Màu xanh thành công */
             --secondary-color: #2c3e50;
             --background-color: #f4f7f9;
             --font-color: #333;
             --button-text-color: #ffffff;
-            --success-color: #27ae60;
             --error-color: #c0392b;
         }
         body {
@@ -32,10 +31,12 @@
             color: var(--font-color);
             box-sizing: border-box;
         }
-        .header {
+        .container {
             width: 100%;
+        }
+        .header {
             text-align: center;
-            margin-bottom: 25px;
+            margin-bottom: 20px;
         }
         .header h1 {
             color: var(--secondary-color);
@@ -48,11 +49,16 @@
         }
         .step {
             margin-bottom: 15px;
+            padding: 15px;
+            background-color: #fff;
+            border-radius: 5px;
+            border-left: 5px solid var(--primary-color);
         }
         .step label {
             font-weight: bold;
             display: block;
-            margin-bottom: 5px;
+            margin-bottom: 8px;
+            font-size: 1.1em;
         }
         input[type="file"] {
             width: 100%;
@@ -75,7 +81,7 @@
             margin-top: 10px;
         }
         .action-button:hover {
-            background-color: #3498db;
+            opacity: 0.9;
         }
         .action-button:disabled {
             background-color: #bdc3c7;
@@ -95,85 +101,72 @@
             margin-top: 0;
             font-size: 1.1em;
             color: var(--secondary-color);
-            border-bottom: 1px solid #ecf0f1;
-            padding-bottom: 8px;
         }
         #status-message {
             font-weight: bold;
             font-size: 1em;
         }
-        .progress-bar-container {
-            width: 100%;
-            background-color: #ecf0f1;
-            border-radius: 5px;
-            margin-top: 10px;
-        }
-        .progress-bar {
-            width: 0%;
-            height: 10px;
-            background-color: var(--success-color);
-            border-radius: 5px;
-            transition: width 0.5s ease-in-out;
+        .final-instruction {
+            margin-top: 15px;
+            padding: 10px;
+            background-color: #eaf5ff;
+            border: 1px solid #3498db;
+            border-radius: 4px;
         }
     </style>
 </head>
 <body>
-    <div class="header">
-        <h1>Zotero Converter</h1>
+    <div class="container">
+        <div class="header">
+            <h1>Công cụ Chuyển đổi Zotero</h1>
+        </div>
+
+        <div class="main-content">
+            <div class="step">
+                <label for="jsonFile">Bước 1: Tải lên `master_map.json`</label>
+                <input type="file" id="jsonFile" accept=".json">
+            </div>
+            <div class="step">
+                <label>Bước 2: Bắt đầu Chuyển đổi</label>
+                <p style="font-size: 0.9em; margin-top: 0;">Quá trình này sẽ tự động thay thế tất cả các mã khóa `{{ZOTERO:...}}` bằng trích dẫn Zotero.</p>
+                <button class="action-button" id="start-conversion-btn">
+                    Bắt đầu Chuyển đổi Toàn bộ
+                </button>
+            </div>
+        </div>
+
+        <div class="status-panel" id="status-panel">
+            <h2 id="status-title">Trạng thái</h2>
+            <div id="status-message">Đang chờ...</div>
+            <div class="final-instruction" id="final-instruction" style="display:none;">
+                <p><strong>QUAN TRỌNG:</strong> Bây giờ, hãy chuyển sang tab "Zotero" trong Word và nhấn nút <strong>"Refresh"</strong> để hoàn tất.</p>
+            </div>
+        </div>
     </div>
 
-    <div class="main-content">
-        <div class="step">
-            <label for="jsonFile">Bước 1: Tải lên tệp `master_map.json`</label>
-            <input type="file" id="jsonFile" accept=".json">
-        </div>
-        <div class="step">
-            <label>Bước 2: Bắt đầu chuyển đổi</label>
-            <button class="action-button" id="start-conversion-btn">
-                Bắt đầu Chuyển đổi
-            </button>
-        </div>
-    </div>
-
-    <div class="status-panel" id="status-panel">
-        <h2>Trạng thái</h2>
-        <div id="status-message">Đang chờ...</div>
-        <div class="progress-bar-container">
-            <div class="progress-bar" id="progress-bar"></div>
-        </div>
-    </div>
-
-    <!-- 3. Mã JavaScript của Add-in -->
+    <!-- Mã JavaScript của Add-in -->
     <script type="text/javascript">
-        // Biến toàn cục để lưu trữ bản đồ liên kết
         let masterMap = null;
 
         Office.onReady((info) => {
             if (info.host === Office.HostType.Word) {
                 console.log("Add-in đã sẵn sàng!");
-                // Gán sự kiện cho các thành phần
-                document.getElementById("start-conversion-btn").onclick = startConversion;
+                document.getElementById("start-conversion-btn").onclick = startFullConversion;
                 document.getElementById("jsonFile").addEventListener('change', handleFileSelect, false);
             }
         });
 
-        /**
-         * Xử lý việc người dùng chọn tệp JSON và đọc nội dung của nó.
-         */
         function handleFileSelect(event) {
             const file = event.target.files[0];
-            if (!file) {
-                return;
-            }
+            if (!file) return;
             const reader = new FileReader();
-            reader.onload = function(e) {
+            reader.onload = (e) => {
                 try {
                     masterMap = JSON.parse(e.target.result);
                     console.log("Đã tải và phân tích thành công tệp master_map.json.");
                     updateStatus("Đã sẵn sàng. Nhấn nút để bắt đầu.", "var(--primary-color)");
                 } catch (error) {
-                    console.error("Lỗi khi phân tích JSON:", error);
-                    alert("Tệp JSON không hợp lệ. Vui lòng kiểm tra lại.");
+                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)");
                     masterMap = null;
                 }
             };
@@ -181,92 +174,111 @@
         }
 
         /**
-         * Hàm chính để bắt đầu quá trình chuyển đổi.
+         * Hàm tạo chuỗi OOXML cho một trích dẫn Zotero "thô".
+         * Zotero sẽ nhận diện và định dạng lại trường này khi nhấn Refresh.
          */
-        async function startConversion() {
+        function createZoteroOoxml(zoteroKey) {
+            // Cấu trúc JSON tối thiểu mà Zotero cần để nhận diện một mục
+            const citationJson = {
+                "citationID": `id_${Math.random().toString(36).substr(2, 9)}`,
+                "properties": {},
+                "citationItems": [{
+                    "key": zoteroKey,
+                    "uris": [`http://zotero.org/users/local/placeholder/items/${zoteroKey}`]
+                }],
+                "schema": "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
+            };
+
+            // Chuyển đối tượng JSON thành chuỗi và thoát các ký tự đặc biệt
+            const jsonString = JSON.stringify(citationJson).replace(/"/g, '&quot;');
+            
+            // Đây là cấu trúc OOXML cho một trường ADDIN
+            const ooxml = `
+                <w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                    <w:r>
+                        <w:fldChar w:fldCharType="begin"/>
+                    </w:r>
+                    <w:r>
+                        <w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText>
+                    </w:r>
+                    <w:r>
+                        <w:fldChar w:fldCharType="separate"/>
+                    </w:r>
+                    <w:r>
+                        <w:rPr>
+                            <w:noProof/>
+                        </w:rPr>
+                        <w:t>(Waiting for Zotero Refresh)</w:t>
+                    </w:r>
+                    <w:r>
+                        <w:fldChar w:fldCharType="end"/>
+                    </w:r>
+                </w:p>`;
+            
+            return ooxml.replace(/\s\s+/g, ' ').trim(); // Dọn dẹp chuỗi OOXML
+        }
+
+        async function startFullConversion() {
             if (!masterMap) {
-                alert("Vui lòng tải lên tệp master_map.json trước.");
+                alert("Vui lòng tải lên tệp `master_map.json` trước.");
                 return;
             }
 
             const startButton = document.getElementById("start-conversion-btn");
             const statusPanel = document.getElementById("status-panel");
-            
+            const finalInstruction = document.getElementById("final-instruction");
+
             startButton.disabled = true;
             statusPanel.style.display = "block";
+            finalInstruction.style.display = "none";
 
             try {
                 await Word.run(async (context) => {
-                    updateStatus("Đang quét toàn bộ tài liệu...", 10);
+                    updateStatus("Đang quét toàn bộ tài liệu...", "var(--primary-color)");
                     
-                    // Lấy tất cả các đoạn văn trong tài liệu
-                    const paragraphs = context.document.body.paragraphs;
-                    context.load(paragraphs, 'text');
+                    const body = context.document.body;
+                    // Tìm kiếm tất cả các mã khóa trong tài liệu
+                    const searchResults = body.search("{{ZOTERO:*}}", { matchWildcards: true });
+                    context.load(searchResults, 'text');
                     await context.sync();
 
-                    const totalParagraphs = paragraphs.items.length;
-                    let processedParagraphs = 0;
+                    const totalPlaceholders = searchResults.items.length;
+                    if (totalPlaceholders === 0) {
+                        updateStatus("Không tìm thấy mã khóa {{ZOTERO:...}} nào.", "var(--primary-color)");
+                        return;
+                    }
 
-                    // Biểu thức chính quy để tìm các cụm trích dẫn, ví dụ: [123] hoặc [12, 34]
-                    const citationPattern = /\[\s*\d+(?:\s*,\s*\d+)*\s*\]/g;
+                    updateStatus(`Tìm thấy ${totalPlaceholders} trích dẫn. Bắt đầu thay thế...`, "var(--primary-color)");
 
-                    for (const para of paragraphs.items) {
-                        const originalText = para.text;
-                        const matches = originalText.match(citationPattern);
+                    for (let i = 0; i < searchResults.items.length; i++) {
+                        const range = searchResults.items[i];
+                        const placeholderText = range.text;
+                        const zoteroKey = placeholderText.replace("{{ZOTERO:", "").replace("}}", "");
 
-                        if (matches) {
-                            let newText = originalText;
-                            // Thay thế từng cụm trích dẫn tìm thấy
-                            for (const match of matches) {
-                                // Tách các số trong một cụm: "[1, 23]" -> ["1", "23"]
-                                const numbers = match.match(/\d+/g) || [];
-                                let replacementString = "";
-                                
-                                // Tạo chuỗi thay thế từ các Zotero key
-                                for (const num of numbers) {
-                                    const refKey = `[${num}]`;
-                                    const zoteroKey = masterMap[refKey];
-                                    if (zoteroKey) {
-                                        replacementString += `{{ZOTERO:${zoteroKey}}}`;
-                                    }
-                                }
-                                // Thay thế cụm trích dẫn cũ bằng chuỗi mã khóa mới
-                                newText = newText.replace(match, replacementString);
-                            }
-                            // Cập nhật lại nội dung của đoạn văn
-                            para.insertText(newText, Word.InsertLocation.replace);
-                        }
-                        
-                        processedParagraphs++;
-                        const progress = (processedParagraphs / totalParagraphs) * 100;
-                        updateStatus(`Đang xử lý đoạn văn ${processedParagraphs}/${totalParagraphs}...`, progress);
+                        // Tạo OOXML cho trích dẫn
+                        const ooxml = createZoteroOoxml(zoteroKey);
+                        // Chèn OOXML vào vị trí của mã khóa
+                        range.insertOoxml(ooxml, Word.InsertLocation.replace);
                     }
 
                     await context.sync();
-                    updateStatus("Hoàn tất! Tài liệu đã được cập nhật.", 100, "var(--success-color)");
+                    updateStatus(`Đã thay thế thành công ${totalPlaceholders} trích dẫn!`, "var(--success-color)");
+                    document.getElementById("status-title").textContent = "Hoàn tất!";
+                    finalInstruction.style.display = "block";
                 });
 
             } catch (error) {
                 console.error(error);
-                updateStatus(`Đã xảy ra lỗi: ${error.message}`, 100, "var(--error-color)");
+                updateStatus(`Đã xảy ra lỗi: ${error.message}`, "var(--error-color)");
             } finally {
-                // Giữ nút bị vô hiệu hóa để người dùng không chạy lại
-                // startButton.disabled = false;
+                // Không kích hoạt lại nút để tránh chạy lại
             }
         }
         
-        /**
-         * Hàm tiện ích để cập nhật giao diện trạng thái.
-         */
-        function updateStatus(message, progress, color = "var(--primary-color)") {
+        function updateStatus(message, color) {
             const statusMessage = document.getElementById("status-message");
-            const progressBar = document.getElementById("progress-bar");
-
             statusMessage.textContent = message;
-            if (progress !== undefined) {
-                progressBar.style.width = `${progress}%`;
-                progressBar.style.backgroundColor = color;
-            }
+            statusMessage.style.color = color;
         }
     </script>
 </body>
