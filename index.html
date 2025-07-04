@@ -106,6 +106,20 @@
             font-weight: bold;
             font-size: 1em;
         }
+        .progress-bar-container {
+            width: 100%;
+            background-color: #ecf0f1;
+            border-radius: 5px;
+            margin-top: 10px;
+            height: 12px;
+        }
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background-color: var(--primary-color);
+            border-radius: 5px;
+            transition: width 0.2s ease-in-out;
+        }
         .final-instruction {
             margin-top: 15px;
             padding: 10px;
@@ -128,9 +142,9 @@
             </div>
             <div class="step">
                 <label>Bước 2: Bắt đầu Chuyển đổi</label>
-                <p style="font-size: 0.9em; margin-top: 0;">Công cụ sẽ xử lý theo từng lô để đảm bảo ổn định. Nhấn nút bên dưới để bắt đầu.</p>
+                <p style="font-size: 0.9em; margin-top: 0;">Quá trình này sẽ tự động thay thế tất cả các mã khóa. Vui lòng chờ cho đến khi hoàn tất.</p>
                 <button class="action-button" id="start-conversion-btn">
-                    Bắt đầu Xử lý theo Lô
+                    Bắt đầu Chuyển đổi Toàn bộ
                 </button>
             </div>
         </div>
@@ -138,6 +152,9 @@
         <div class="status-panel" id="status-panel">
             <h2 id="status-title">Trạng thái</h2>
             <div id="status-message">Đang chờ...</div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
             <div class="final-instruction" id="final-instruction" style="display:none;">
                 <p><strong>QUAN TRỌNG:</strong> Bây giờ, hãy chuyển sang tab "Zotero" trong Word và nhấn nút <strong>"Refresh"</strong> để hoàn tất.</p>
             </div>
@@ -147,12 +164,13 @@
     <!-- Mã JavaScript của Add-in -->
     <script type="text/javascript">
         let masterMap = null;
-        const BATCH_SIZE = 20; // Xử lý 20 mục mỗi lần để tránh quá tải
+        let totalPlaceholders = 0;
+        let processedPlaceholders = 0;
 
         Office.onReady((info) => {
             if (info.host === Office.HostType.Word) {
                 console.log("Add-in đã sẵn sàng!");
-                document.getElementById("start-conversion-btn").onclick = processBatch;
+                document.getElementById("start-conversion-btn").onclick = startFullConversion;
                 document.getElementById("jsonFile").addEventListener('change', handleFileSelect, false);
             }
         });
@@ -165,9 +183,9 @@
                 try {
                     masterMap = JSON.parse(e.target.result);
                     console.log("Đã tải và phân tích thành công tệp master_map.json.");
-                    updateStatus("Đã sẵn sàng. Nhấn nút để bắt đầu.", "var(--primary-color)");
+                    updateStatus("Đã sẵn sàng. Nhấn nút để bắt đầu.", "var(--primary-color)", 0);
                 } catch (error) {
-                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)");
+                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)", 0);
                     masterMap = null;
                 }
             };
@@ -186,7 +204,7 @@
             return ooxml.replace(/\s\s+/g, ' ').trim();
         }
 
-        async function processBatch() {
+        async function startFullConversion() {
             if (!masterMap) {
                 alert("Vui lòng tải lên tệp `master_map.json` trước.");
                 return;
@@ -197,62 +215,84 @@
             
             startButton.disabled = true;
             statusPanel.style.display = "block";
+            
+            processedPlaceholders = 0;
 
             try {
+                // Đầu tiên, đếm tổng số mục cần xử lý
                 await Word.run(async (context) => {
-                    updateStatus("Đang tìm kiếm các mã khóa còn lại...", "var(--primary-color)");
-                    
-                    const body = context.document.body;
-                    // Tìm kiếm tối đa BATCH_SIZE + 1 mục để biết có còn lô tiếp theo không
-                    const searchResults = body.search("{{ZOTERO:*}}", { matchWildcards: true, top: BATCH_SIZE + 1 });
+                    updateStatus("Đang đếm tổng số trích dẫn...", "var(--primary-color)", 5);
+                    const searchResults = context.document.body.search("{{ZOTERO:*}}", { matchWildcards: true });
+                    context.load(searchResults, 'text');
+                    await context.sync();
+                    totalPlaceholders = searchResults.items.length;
+                });
+
+                if (totalPlaceholders === 0) {
+                    updateStatus("Không tìm thấy mã khóa {{ZOTERO:...}} nào.", "var(--primary-color)", 100);
+                    startButton.disabled = false;
+                    return;
+                }
+
+                // Bắt đầu quá trình xử lý tuần tự
+                await processNextPlaceholder();
+
+            } catch (error) {
+                console.error("Lỗi trong quá trình khởi tạo:", error);
+                updateStatus(`Đã xảy ra lỗi khởi tạo: ${error.message}`, "var(--error-color)", 100);
+                startButton.disabled = false;
+            }
+        }
+
+        // --- ĐÃ TỐI ƯU HÓA: Hàm xử lý tuần tự từng mục một ---
+        async function processNextPlaceholder() {
+            try {
+                await Word.run(async (context) => {
+                    // Tìm chỉ một mục đầu tiên
+                    const searchResults = context.document.body.search("{{ZOTERO:*}}", { matchWildcards: true, top: 1 });
                     context.load(searchResults, 'text');
                     await context.sync();
 
-                    const placeholdersInBatch = searchResults.items.slice(0, BATCH_SIZE);
-                    const hasMore = searchResults.items.length > BATCH_SIZE;
-
-                    if (placeholdersInBatch.length === 0) {
-                        updateStatus("Hoàn tất! Không còn mã khóa nào để xử lý.", "var(--success-color)");
-                        document.getElementById("status-title").textContent = "Hoàn tất!";
-                        document.getElementById("final-instruction").style.display = "block";
-                        startButton.style.display = 'none'; // Ẩn nút sau khi xong
-                        return;
-                    }
-
-                    updateStatus(`Đang xử lý lô ${placeholdersInBatch.length} trích dẫn...`, "var(--primary-color)");
-
-                    for (const range of placeholdersInBatch) {
+                    if (searchResults.items.length > 0) {
+                        const range = searchResults.items[0];
                         const placeholderText = range.text;
                         const zoteroKey = placeholderText.replace("{{ZOTERO:", "").replace("}}", "");
+                        
                         const ooxml = createZoteroOoxml(zoteroKey);
                         range.insertOoxml(ooxml, Word.InsertLocation.replace);
-                    }
+                        
+                        await context.sync();
+                        
+                        processedPlaceholders++;
+                        const progress = (processedPlaceholders / totalPlaceholders) * 100;
+                        updateStatus(`Đã xử lý ${processedPlaceholders} / ${totalPlaceholders} trích dẫn...`, "var(--primary-color)", progress);
 
-                    await context.sync();
-                    
-                    if (hasMore) {
-                        updateStatus(`Đã xử lý xong lô này. Nhấn nút để tiếp tục.`, "var(--primary-color)");
-                        startButton.textContent = "Xử lý Lô Tiếp theo";
-                        startButton.disabled = false; // Kích hoạt lại nút cho lô tiếp theo
+                        // Gọi đệ quy để xử lý mục tiếp theo.
+                        // Một khoảng chờ nhỏ giúp giao diện không bị "đơ".
+                        setTimeout(processNextPlaceholder, 50);
                     } else {
-                        updateStatus(`Hoàn tất! Đã thay thế thành công tất cả trích dẫn.`, "var(--success-color)");
+                        // Không còn mục nào, quá trình hoàn tất.
+                        updateStatus(`Hoàn tất! Đã thay thế thành công ${processedPlaceholders} trích dẫn.`, "var(--success-color)", 100);
                         document.getElementById("status-title").textContent = "Hoàn tất!";
                         document.getElementById("final-instruction").style.display = "block";
-                        startButton.style.display = 'none'; // Ẩn nút sau khi xong
+                        document.getElementById("start-conversion-btn").style.display = 'none';
                     }
                 });
-
             } catch (error) {
                 console.error(error);
-                updateStatus(`Đã xảy ra lỗi: ${error.message}`, "var(--error-color)");
-                startButton.disabled = false; // Kích hoạt lại nút nếu có lỗi
+                updateStatus(`Đã xảy ra lỗi tại trích dẫn số ${processedPlaceholders + 1}: ${error.message}`, "var(--error-color)", 100);
             }
         }
         
-        function updateStatus(message, color) {
+        function updateStatus(message, color, progress) {
             const statusMessage = document.getElementById("status-message");
+            const progressBar = document.getElementById("progress-bar");
             statusMessage.textContent = message;
             statusMessage.style.color = color;
+            if (progress !== undefined) {
+                progressBar.style.width = `${progress}%`;
+                progressBar.style.backgroundColor = color;
+            }
         }
     </script>
 </body>
