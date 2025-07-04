@@ -111,44 +111,7 @@
             reader.readAsText(file);
         }
 
-        // --- ĐÃ NÂNG CẤP: Hàm quét toàn diện tài liệu ---
-        async function comprehensiveSearch(context, searchText) {
-            const allSearchResults = [];
-            
-            // 1. Quét nội dung chính (body)
-            const bodyResults = context.document.body.search(searchText, { matchWildcards: true });
-            context.load(bodyResults, "text");
-            
-            // 2. Quét tất cả các chú thích cuối trang (footnotes)
-            const footnoteResults = context.document.body.getFootnotes().search(searchText, { matchWildcards: true });
-            context.load(footnoteResults, "text");
-
-            // 3. Quét tất cả các chú thích cuối văn bản (endnotes)
-            const endnoteResults = context.document.body.getEndnotes().search(searchText, { matchWildcards: true });
-            context.load(endnoteResults, "text");
-            
-            // 4. Quét tất cả các bảng biểu
-            const tables = context.document.body.tables;
-            context.load(tables);
-            await context.sync();
-            
-            const tableSearchResults = [];
-            for (const table of tables.items) {
-                const results = table.body.search(searchText, { matchWildcards: true });
-                context.load(results, "text");
-                tableSearchResults.push(results);
-            }
-
-            await context.sync(); // Đồng bộ hóa tất cả các lệnh đã gửi
-            
-            allSearchResults.push(...bodyResults.items);
-            allSearchResults.push(...footnoteResults.items);
-            allSearchResults.push(...endnoteResults.items);
-            tableSearchResults.forEach(results => allSearchResults.push(...results.items));
-            
-            return allSearchResults;
-        }
-
+        // --- ĐÃ NÂNG CẤP: Sử dụng phương pháp tìm kiếm toàn diện và an toàn nhất ---
         async function tagDocument() {
             if (!masterMap) {
                 alert("Vui lòng tải lên tệp `master_map.json` trước.");
@@ -161,12 +124,14 @@
                 await Word.run(async (context) => {
                     updateStatus("Bắt đầu quá trình Gắn thẻ (Quét toàn diện)...", "var(--primary-color)");
                     
-                    // Sử dụng cú pháp wildcard chính xác của Word: \[([0-9]{1,})\]
-                    const searchResults = await comprehensiveSearch(context, "\\[[0-9]{1,}\\]");
+                    // Sử dụng cú pháp wildcard chính xác của Word để tìm [số]
+                    const searchResults = context.document.body.search("\\[[0-9]{1,}\\]", { matchWildcards: true });
+                    context.load(searchResults, "text");
+                    await context.sync();
 
                     let replacementsCount = 0;
-                    if (searchResults.length > 0) {
-                        for (const range of searchResults) {
+                    if (searchResults.items.length > 0) {
+                        for (const range of searchResults.items) {
                             const refKey = range.text; // e.g., "[123]"
                             const zoteroKey = masterMap[refKey];
                             if (zoteroKey) {
@@ -199,34 +164,39 @@
             return ooxmlFragment.replace(/\s\s+/g, ' ').trim();
         }
 
+        // --- ĐÃ TỐI ƯU HÓA: Sử dụng phương pháp xử lý tuần tự an toàn ---
         async function finalizeConversion() {
             const button = document.getElementById("finalize-btn");
             button.disabled = true;
 
             try {
                 await Word.run(async (context) => {
-                    updateStatus("Bắt đầu quá trình Hoàn tất (Quét toàn diện)...", "var(--success-color)");
-                    
-                    // Sử dụng cú pháp wildcard chính xác của Word: \{\{ZOTERO:*\}\}
-                    const searchResults = await comprehensiveSearch(context, "\\{\\{ZOTERO:*\\}\\}");
-                    
-                    if (searchResults.length === 0) {
-                        updateStatus("Không tìm thấy mã khóa nào để hoàn tất.", "var(--success-color)");
-                        button.disabled = false;
-                        return;
-                    }
-                    
-                    let replacementsCount = 0;
-                    for (const range of searchResults) {
+                    updateStatus("Bắt đầu quá trình Hoàn tất...", "var(--success-color)");
+
+                    // Vòng lặp để xử lý từng mục một cho đến khi không còn gì để xử lý
+                    while (true) {
+                        // Sử dụng cú pháp wildcard chính xác của Word để tìm {{ZOTERO:*}}
+                        const searchResults = context.document.body.search("\\{\\{ZOTERO:*\\}\\}", { matchWildcards: true, top: 1 });
+                        context.load(searchResults, "text");
+                        await context.sync();
+
+                        if (searchResults.items.length === 0) {
+                            // Không còn gì để xử lý, kết thúc vòng lặp
+                            break; 
+                        }
+
+                        const range = searchResults.items[0];
                         const placeholderText = range.text;
                         const zoteroKey = placeholderText.replace("{{ZOTERO:", "").replace("}}", "");
+                        
                         const ooxml = createZoteroOoxml(zoteroKey);
                         range.insertOoxml(ooxml, Word.InsertLocation.replace);
-                        replacementsCount++;
+                        
+                        await context.sync();
+                        updateStatus(`Đã xử lý key: ${zoteroKey}...`, "var(--success-color)");
                     }
 
-                    await context.sync();
-                    updateStatus(`Hoàn tất! Đã chuyển đổi ${replacementsCount} mã khóa.`, "var(--success-color)");
+                    updateStatus(`Hoàn tất! Đã chuyển đổi tất cả mã khóa.`, "var(--success-color)");
                     document.getElementById("status-title").textContent = "Hoàn tất!";
                     document.getElementById("final-instruction").style.display = "block";
                 });
