@@ -153,15 +153,18 @@
                         await context.sync();
 
                         if (searchResults.items.length > 0) {
+                            // Gọi hàm xử lý và chờ nó hoàn thành
                             await processorFunction(searchResults.items[0]);
                             await context.sync();
                             processedItems++;
                             const progress = (processedItems / totalItems) * 100;
                             updateStatus(`Đang ${taskName}... ${processedItems}/${totalItems}`, "var(--primary-color)", progress);
                         } else {
+                            // Không tìm thấy nữa, kết thúc vòng lặp
                             processedItems = totalItems;
                         }
                     });
+                     // Thêm một khoảng chờ nhỏ để Word "thở"
                     await new Promise(resolve => setTimeout(resolve, 50));
                 }
                 
@@ -195,7 +198,8 @@
                     await range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
                 } else {
                     console.warn(`⚠️ Không tìm thấy key cho: ${refKey}. Tô màu vàng.`);
-                    range.font.highlightColor = '#FFFF00'; // Tô vàng các mục không tìm thấy
+                    // Tô vàng các mục không tìm thấy để người dùng dễ nhận biết
+                    range.font.highlightColor = '#FFFF00'; // Màu vàng
                 }
             } catch (err) {
                 console.error(`❌ Lỗi khi xử lý: ${refKey}`, err.name, err.message);
