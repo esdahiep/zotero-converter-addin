@@ -194,6 +194,7 @@
                 "schema": "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
             };
             const jsonString = JSON.stringify(citationJson).replace(/"/g, '&quot;');
+            // Đây là cấu trúc OOXML cho một trường ADDIN, được thiết kế để thay thế một đoạn text
             const ooxmlFragment = `<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:t>(Waiting for Zotero Refresh)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
             return ooxmlFragment.replace(/\s\s+/g, ' ').trim();
         }
