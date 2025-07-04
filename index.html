@@ -65,7 +65,7 @@
             </div>
             <div class="step step-1">
                 <label>Bước 2: Gắn thẻ cho Tài liệu</label>
-                <p style="font-size: 0.9em; margin-top: 0;">Thay thế các số `[123]` bằng mã khóa `{{ZOTERO:Key}}`.</p>
+                <p style="font-size: 0.9em; margin-top: 0;">Thay thế các số `[123]` bằng mã khóa `{{ZOTERO:Key}}` trên toàn bộ tài liệu.</p>
                 <button class="action-button" id="tagging-btn">Bắt đầu Gắn thẻ</button>
             </div>
              <div class="step step-2">
@@ -111,6 +111,7 @@
             reader.readAsText(file);
         }
 
+        // --- ĐÃ NÂNG CẤP: Sử dụng phương pháp tìm kiếm toàn diện ---
         async function tagDocument() {
             if (!masterMap) {
                 alert("Vui lòng tải lên tệp `master_map.json` trước.");
@@ -123,31 +124,22 @@
                 await Word.run(async (context) => {
                     updateStatus("Bắt đầu quá trình Gắn thẻ...", "var(--primary-color)");
                     
-                    const paragraphs = context.document.body.paragraphs;
-                    context.load(paragraphs, "text");
+                    const searchResults = context.document.body.search("[[0-9]{1,}]", { matchWildcards: true });
+                    context.load(searchResults, "text");
                     await context.sync();
 
-                    const citationPattern = /\[(\d+)\]/g;
                     let replacementsCount = 0;
-
-                    for (const para of paragraphs.items) {
-                        let originalText = para.text;
-                        if (citationPattern.test(originalText)) {
-                            const newText = originalText.replace(citationPattern, (match, num) => {
-                                const refKey = `[${num}]`;
-                                const zoteroKey = masterMap[refKey];
-                                if (zoteroKey) {
-                                    replacementsCount++;
-                                    return `{{ZOTERO:${zoteroKey}}}`;
-                                }
-                                return match; // Giữ nguyên nếu không tìm thấy trong map
-                            });
-                            
-                            if (newText !== originalText) {
-                                para.insertText(newText, Word.InsertLocation.replace);
+                    if (searchResults.items.length > 0) {
+                        for (const range of searchResults.items) {
+                            const refKey = range.text; // e.g., "[123]"
+                            const zoteroKey = masterMap[refKey];
+                            if (zoteroKey) {
+                                range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
+                                replacementsCount++;
                             }
                         }
                     }
+                    
                     await context.sync();
                     updateStatus(`Gắn thẻ hoàn tất! Đã thay thế ${replacementsCount} số tham khảo. Sẵn sàng để Hoàn tất.`, "var(--primary-color)");
                 });
@@ -166,43 +158,55 @@
                 "schema": "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
             };
             const jsonString = JSON.stringify(citationJson).replace(/"/g, '&quot;');
+            // Đây là cấu trúc OOXML cho một trường ADDIN, được thiết kế để thay thế một đoạn text
             const ooxmlFragment = `<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:t>(Waiting for Zotero Refresh)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
             return ooxmlFragment.replace(/\s\s+/g, ' ').trim();
         }
 
+        // --- ĐÃ NÂNG CẤP: Sử dụng phương pháp xử lý tuần tự an toàn ---
         async function finalizeConversion() {
             const button = document.getElementById("finalize-btn");
             button.disabled = true;
 
             try {
                 await Word.run(async (context) => {
-                    updateStatus("Bắt đầu quá trình Hoàn tất...", "var(--success-color)");
-                    
-                    const paragraphs = context.document.body.paragraphs;
-                    context.load(paragraphs, "text");
+                    // Đếm tổng số mục cần xử lý trước
+                    updateStatus("Đang đếm tổng số mã khóa...", "var(--success-color)");
+                    const initialSearchResults = context.document.body.search("{{ZOTERO:*}}", { matchWildcards: true });
+                    context.load(initialSearchResults, "text");
                     await context.sync();
-
-                    const placeholderRegex = /\{\{ZOTERO:([^}]+)\}\}/g;
-                    let replacementsCount = 0;
-
-                    for (const para of paragraphs.items) {
-                        const originalText = para.text;
-                        if (placeholderRegex.test(originalText)) {
-                            const paraOoxml = para.getOoxml();
-                            await context.sync();
-
-                            let ooxmlString = paraOoxml.value;
-                            
-                            const newOoxmlString = ooxmlString.replace(placeholderRegex, (match, zoteroKey) => {
-                                replacementsCount++;
-                                return createZoteroOoxml(zoteroKey);
-                            });
-
-                            para.insertOoxml(newOoxmlString, Word.InsertLocation.replace);
-                        }
+                    const totalPlaceholders = initialSearchResults.items.length;
+                    
+                    if (totalPlaceholders === 0) {
+                        updateStatus("Không tìm thấy mã khóa nào để hoàn tất.", "var(--success-color)");
+                        button.disabled = false;
+                        return;
                     }
 
-                    await context.sync();
+                    let replacementsCount = 0;
+                    
+                    // Vòng lặp để xử lý từng mục một
+                    while (true) {
+                        const searchResults = context.document.body.search("{{ZOTERO:*}}", { matchWildcards: true, top: 1 });
+                        context.load(searchResults, "text");
+                        await context.sync();
+
+                        if (searchResults.items.length === 0) {
+                            break; // Không còn gì để xử lý
+                        }
+
+                        const range = searchResults.items[0];
+                        const placeholderText = range.text;
+                        const zoteroKey = placeholderText.replace("{{ZOTERO:", "").replace("}}", "");
+                        
+                        const ooxml = createZoteroOoxml(zoteroKey);
+                        range.insertOoxml(ooxml, Word.InsertLocation.replace);
+                        
+                        await context.sync();
+                        replacementsCount++;
+                        updateStatus(`Đang hoàn tất... ${replacementsCount}/${totalPlaceholders}`, "var(--success-color)");
+                    }
+
                     updateStatus(`Hoàn tất! Đã chuyển đổi ${replacementsCount} mã khóa.`, "var(--success-color)");
                     document.getElementById("status-title").textContent = "Hoàn tất!";
                     document.getElementById("final-instruction").style.display = "block";
