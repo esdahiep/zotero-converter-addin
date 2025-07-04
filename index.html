@@ -236,24 +236,29 @@
             }
         }
 
-        // --- ĐÃ SỬA LỖI: Hàm chèn trích dẫn chuẩn của Word vào tài liệu ---
+        // --- ĐÃ SỬA LỖI: Sử dụng API chính thức để chèn trích dẫn ---
         async function insertWordCitation(sourceTag) {
             try {
                 await Word.run(async (context) => {
-                    // Tạo một chuỗi OOXML fragment hợp lệ, chỉ chứa một 'run' <w:r>
-                    // thay vì một gói package hoàn chỉnh.
-                    const ooxml = `
-                        <w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-                            <w:fldSimple w:instr=" CITATION ${sourceTag} \\l 1033 "/>
-                        </w:r>`;
+                    // Lấy vị trí con trỏ chuột hiện tại
+                    const range = context.document.getSelection();
                     
-                    // Chèn OOXML vào vị trí con trỏ chuột hiện tại
-                    context.document.getSelection().insertOoxml(ooxml, Word.InsertLocation.replace);
+                    // Xóa vùng chọn hiện tại (nếu có) để chuẩn bị chèn
+                    range.clear();
+
+                    // Sử dụng API chính thức để chèn trường trích dẫn
+                    // Đây là phương pháp mạnh mẽ và ổn định hơn
+                    range.insertField(
+                        Word.FieldType.citation,
+                        `CITATION ${sourceTag} \\l 1033`, // Mã lệnh cho trích dẫn
+                        Word.InsertLocation.start
+                    );
+
                     await context.sync();
                 });
             } catch (error) {
                 console.error("Lỗi khi chèn trích dẫn Word:", error);
-                alert("Đã xảy ra lỗi khi chèn trích dẫn.");
+                alert("Đã xảy ra lỗi khi chèn trích dẫn. Vui lòng thử lại.");
             }
         }
     </script>
