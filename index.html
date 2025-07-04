@@ -106,6 +106,20 @@
             font-weight: bold;
             font-size: 1em;
         }
+        .progress-bar-container {
+            width: 100%;
+            background-color: #ecf0f1;
+            border-radius: 5px;
+            margin-top: 10px;
+            height: 12px;
+        }
+        .progress-bar {
+            width: 0%;
+            height: 100%;
+            background-color: var(--primary-color);
+            border-radius: 5px;
+            transition: width 0.2s ease-in-out;
+        }
         .final-instruction {
             margin-top: 15px;
             padding: 10px;
@@ -138,6 +152,9 @@
         <div class="status-panel" id="status-panel">
             <h2 id="status-title">Trạng thái</h2>
             <div id="status-message">Đang chờ...</div>
+            <div class="progress-bar-container">
+                <div class="progress-bar" id="progress-bar"></div>
+            </div>
             <div class="final-instruction" id="final-instruction" style="display:none;">
                 <p><strong>QUAN TRỌNG:</strong> Bây giờ, hãy chuyển sang tab "Zotero" trong Word và nhấn nút <strong>"Refresh"</strong> để hoàn tất.</p>
             </div>
@@ -164,9 +181,9 @@
                 try {
                     masterMap = JSON.parse(e.target.result);
                     console.log("Đã tải và phân tích thành công tệp master_map.json.");
-                    updateStatus("Đã sẵn sàng. Nhấn nút để bắt đầu.", "var(--primary-color)");
+                    updateStatus("Đã sẵn sàng. Nhấn nút để bắt đầu.", "var(--primary-color)", 0);
                 } catch (error) {
-                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)");
+                    updateStatus("Lỗi: Tệp JSON không hợp lệ.", "var(--error-color)", 0);
                     masterMap = null;
                 }
             };
@@ -181,8 +198,9 @@
                 "schema": "https://github.com/citation-style-language/schema/raw/master/csl-citation.json"
             };
             const jsonString = JSON.stringify(citationJson).replace(/"/g, '&quot;');
-            const ooxml = `<w:p xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:t>(Waiting for Zotero Refresh)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>`;
-            return ooxml.replace(/\s\s+/g, ' ').trim();
+            // Đây là cấu trúc OOXML cho một trường ADDIN, được thiết kế để thay thế một đoạn text
+            const ooxmlFragment = `<w:r xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> ADDIN ZOTERO_ITEM CSL_CITATION ${jsonString}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:rPr><w:noProof/></w:rPr><w:t>(Waiting for Zotero Refresh)</w:t></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r>`;
+            return ooxmlFragment.replace(/\s\s+/g, ' ').trim();
         }
 
         async function startFullConversion() {
@@ -199,60 +217,68 @@
 
             try {
                 await Word.run(async (context) => {
-                    updateStatus("Đang đọc toàn bộ tài liệu...", "var(--primary-color)");
+                    updateStatus("Đang quét toàn bộ tài liệu...", "var(--primary-color)", 5);
                     
-                    const body = context.document.body;
-                    // Lấy toàn bộ nội dung tài liệu dưới dạng OOXML
-                    const originalOoxml = body.getOoxml();
+                    const paragraphs = context.document.body.paragraphs;
+                    context.load(paragraphs, "text");
                     await context.sync();
 
-                    let ooxmlString = originalOoxml.value;
-                    let replacementsCount = 0;
+                    const totalParagraphs = paragraphs.items.length;
+                    let processedParagraphs = 0;
 
-                    updateStatus("Đang thực hiện thay thế trong bộ nhớ...", "var(--primary-color)");
-
-                    // Biểu thức chính quy để tìm tất cả các mã khóa
                     const placeholderRegex = /\{\{ZOTERO:([^}]+)\}\}/g;
-                    
-                    // Thực hiện thay thế trên chuỗi OOXML
-                    const newOoxmlString = ooxmlString.replace(placeholderRegex, (match, zoteroKey) => {
-                        replacementsCount++;
-                        // Tạo OOXML cho trích dẫn Zotero
-                        // Lưu ý: Chúng ta cần trích xuất chỉ phần bên trong của thẻ <w:p>
-                        const zoteroOoxml = createZoteroOoxml(zoteroKey);
-                        const contentMatch = /<w:p[^>]*>([\s\S]*)<\/w:p>/.exec(zoteroOoxml);
-                        return contentMatch ? contentMatch[1] : '';
-                    });
 
-                    if (replacementsCount > 0) {
-                        updateStatus(`Đã chuẩn bị xong ${replacementsCount} trích dẫn. Đang xây dựng lại tài liệu...`, "var(--primary-color)");
+                    for (const para of paragraphs.items) {
+                        const originalText = para.text;
+                        if (placeholderRegex.test(originalText)) {
+                            // Lấy OOXML của chỉ đoạn văn này
+                            const paraOoxml = para.getOoxml();
+                            await context.sync();
+
+                            let ooxmlString = paraOoxml.value;
+                            let hasReplacement = false;
+                            
+                            // Thực hiện thay thế trên chuỗi OOXML của đoạn văn
+                            const newOoxmlString = ooxmlString.replace(placeholderRegex, (match, zoteroKey) => {
+                                hasReplacement = true;
+                                return createZoteroOoxml(zoteroKey);
+                            });
+
+                            if (hasReplacement) {
+                                // Thay thế toàn bộ đoạn văn bằng phiên bản OOXML đã sửa
+                                para.insertOoxml(newOoxmlString, Word.InsertLocation.replace);
+                            }
+                        }
                         
-                        // Xóa nội dung cũ và chèn nội dung mới đã được thay thế
-                        body.clear();
-                        body.insertOoxml(newOoxmlString, Word.InsertLocation.start);
-                    } else {
-                         updateStatus("Không tìm thấy mã khóa nào để thay thế.", "var(--primary-color)");
+                        processedParagraphs++;
+                        const progress = (processedParagraphs / totalParagraphs) * 100;
+                        updateStatus(`Đã quét ${processedParagraphs} / ${totalParagraphs} đoạn văn...`, "var(--primary-color)", progress);
                     }
 
                     await context.sync();
                     
-                    updateStatus(`Hoàn tất! Đã thay thế thành công ${replacementsCount} trích dẫn.`, "var(--success-color)");
+                    updateStatus(`Hoàn tất! Đã xử lý toàn bộ tài liệu.`, "var(--success-color)", 100);
                     document.getElementById("status-title").textContent = "Hoàn tất!";
                     document.getElementById("final-instruction").style.display = "block";
                 });
 
             } catch (error) {
                 console.error(error);
-                updateStatus(`Đã xảy ra lỗi: ${error.message}`, "var(--error-color)");
+                updateStatus(`Đã xảy ra lỗi: ${error.message}`, "var(--error-color)", 100);
             } finally {
                 // Không kích hoạt lại nút để tránh chạy lại
             }
         }
         
-        function updateStatus(message, color) {
+        function updateStatus(message, color, progress) {
             const statusMessage = document.getElementById("status-message");
+            const progressBar = document.getElementById("progress-bar");
             statusMessage.textContent = message;
             statusMessage.style.color = color;
+            if (progress !== undefined) {
+                progressBar.style.width = `${progress}%`;
+                progressBar.style.backgroundColor = color;
+            }
         }
     </script>
 </body>
