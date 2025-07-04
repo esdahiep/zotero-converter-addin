@@ -73,7 +73,7 @@
              <div class="step step-2">
                 <label>Bước 3: Hoàn tất Tự động</label>
                 <p style="font-size: 0.9em; margin-top: 0;">Chuyển đổi các mã khóa đã gắn thẻ thành trích dẫn Zotero.</p>
-                <button class="action-button" id="finalize-btn">Bắt đầu Hoàn tất</button>
+                <button class="action-button" id="finalize-btn" disabled>Bắt đầu Hoàn tất</button>
             </div>
         </div>
 
@@ -153,22 +153,24 @@
                         await context.sync();
 
                         if (searchResults.items.length > 0) {
-                            // Gọi hàm xử lý và chờ nó hoàn thành
                             await processorFunction(searchResults.items[0]);
                             await context.sync();
                             processedItems++;
                             const progress = (processedItems / totalItems) * 100;
                             updateStatus(`Đang ${taskName}... ${processedItems}/${totalItems}`, "var(--primary-color)", progress);
                         } else {
-                            // Không tìm thấy nữa, kết thúc vòng lặp
                             processedItems = totalItems;
                         }
                     });
-                     // Thêm một khoảng chờ nhỏ để Word "thở"
                     await new Promise(resolve => setTimeout(resolve, 50));
                 }
                 
                 updateStatus(`Hoàn tất tác vụ "${taskName}"! Đã xử lý ${processedItems} mục.`, "var(--success-color)", 100);
+                
+                if (taskName === 'Gắn thẻ' && processedItems > 0) {
+                    document.getElementById("finalize-btn").disabled = false; // Kích hoạt nút Hoàn tất
+                }
+                
                 if (taskName === 'Hoàn tất') {
                     document.getElementById("status-title").textContent = "Hoàn tất!";
                     document.getElementById("final-instruction").style.display = "block";
@@ -181,7 +183,7 @@
             }
         }
 
-        // --- ĐÃ SỬA LỖI: Thêm `async/await` và kiểm tra zoteroKey ---
+        // --- ĐÃ TÍCH HỢP PHÂN TÍCH CỦA BẠN ---
         async function tagSingleItem(range) {
             const refKey = range.text.trim();
             const zoteroKey = masterMap?.[refKey];
@@ -193,12 +195,11 @@
                     await range.insertText(`{{ZOTERO:${zoteroKey}}}`, Word.InsertLocation.replace);
                 } else {
                     console.warn(`⚠️ Không tìm thấy key cho: ${refKey}. Tô màu vàng.`);
-                    // Tô vàng các mục không tìm thấy để người dùng dễ nhận biết
-                    range.font.highlightColor = '#FFFF00'; // Màu vàng
+                    range.font.highlightColor = '#FFFF00'; // Tô vàng các mục không tìm thấy
                 }
             } catch (err) {
                 console.error(`❌ Lỗi khi xử lý: ${refKey}`, err.name, err.message);
-                // Ném lỗi ra ngoài để vòng lặp chính có thể bắt được
+                range.font.highlightColor = '#FF0000'; // Tô đỏ mục gây lỗi
                 throw err;
             }
         }
